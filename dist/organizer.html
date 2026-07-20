@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>标签分类</title>
+    <link rel="stylesheet" href="./organizer.css" />
+  </head>
+  <body>
+    <section class="favorite-section" id="favoriteSection">
+      <div class="section-header">
+        <h2 class="section-title">常用网站</h2>
+        <button class="btn btn-mini" id="editFavoritesBtn" type="button">编辑分类</button>
+      </div>
+      <div id="favoriteContainer"></div>
+      <div id="favEditActions" class="fav-edit-actions" hidden>
+        <button class="btn btn-mini btn-add-category-inline" id="addCategoryInlineBtn" type="button">+ 新建分类</button>
+      </div>
+    </section>
+
+    <section class="category-section">
+      <div class="section-header">
+        <h2 class="section-title">打开页面</h2>
+      </div>
+      <main id="categoryContainer" class="category-container"></main>
+    </section>
+
+    <template id="categoryTemplate">
+      <section class="category" draggable="false">
+        <div class="category-header">
+          <div class="category-title-row">
+            <img class="category-favicon" alt="" loading="lazy" />
+            <h2 class="category-title"></h2>
+          </div>
+          <div class="category-actions">
+            <button class="btn btn-mini close-all-btn" type="button">全部关闭</button>
+            <button class="btn btn-mini btn-danger delete-category-btn" type="button">删除分类</button>
+          </div>
+        </div>
+        <ul class="tab-list"></ul>
+      </section>
+    </template>
+
+    <template id="tabItemTemplate">
+      <li class="tab-item" draggable="true">
+        <div class="tab-main">
+          <div class="tab-title-row">
+            <img class="tab-favicon" alt="" loading="lazy" />
+            <div class="tab-title"></div>
+          </div>
+          <a class="tab-link" target="_blank" rel="noreferrer noopener"></a>
+        </div>
+        <button class="btn-icon tab-close-btn" type="button" title="关闭标签">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </li>
+    </template>
+
+    <template id="favoriteCategoryTemplate">
+      <div class="fav-category">
+        <div class="fav-category-header">
+          <div class="fav-category-title-row">
+            <span class="fav-category-name" title="点击编辑分类名"></span>
+            <span class="fav-category-count"></span>
+          </div>
+          <div class="fav-category-actions">
+            <button class="btn btn-mini btn-danger delete-fav-category-btn edit-mode-only" type="button">删除分类</button>
+          </div>
+        </div>
+        <div class="fav-site-list"></div>
+        <button class="btn btn-mini btn-add-site" type="button">+ 添加网站</button>
+      </div>
+    </template>
+
+    <template id="favoriteSiteTemplate">
+      <div class="fav-site-card" draggable="true">
+        <div class="fav-site-main">
+          <img class="fav-site-favicon" alt="" loading="lazy" />
+          <div class="fav-site-info">
+            <span class="fav-site-title"></span>
+            <span class="fav-site-url"></span>
+          </div>
+        </div>
+        <div class="fav-site-hover-actions">
+          <button class="btn btn-mini edit-fav-btn" type="button">编辑</button>
+          <button class="btn btn-mini btn-danger delete-fav-btn" type="button">删除</button>
+        </div>
+      </div>
+    </template>
+
+    <div id="favSiteModal" class="modal-overlay" hidden>
+      <div class="modal-card">
+        <h3 class="modal-title" id="favSiteModalTitle">添加网站</h3>
+        <label class="modal-label">
+          名称（可选）
+          <input class="modal-input" id="favSiteNameInput" type="text" placeholder="留空则自动获取网页标题" maxlength="60" />
+        </label>
+        <label class="modal-label">
+          网址
+          <input class="modal-input" id="favSiteUrlInput" type="url" placeholder="https://example.com" />
+        </label>
+        <input type="hidden" id="favSiteModalCatId" />
+        <input type="hidden" id="favSiteModalEditId" />
+        <div class="modal-actions">
+          <button class="btn btn-cancel" id="favSiteModalCancel" type="button">取消</button>
+          <button class="btn btn-primary" id="favSiteModalSave" type="button">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="linkPreview" class="link-preview" hidden>
+      <div class="link-preview-domain"></div>
+      <div class="link-preview-title"></div>
+      <div class="link-preview-summary"></div>
+      <div class="link-preview-url"></div>
+    </div>
+
+    <script src="./organizer.clean.js" type="module"></script>
+  </body>
+</html>
