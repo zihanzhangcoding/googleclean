@@ -7,23 +7,50 @@
     <link rel="stylesheet" href="./organizer.css" />
   </head>
   <body>
-    <section class="favorite-section" id="favoriteSection">
-      <div class="section-header">
-        <h2 class="section-title">常用网站</h2>
-        <button class="btn btn-mini" id="editFavoritesBtn" type="button">编辑分类</button>
-      </div>
-      <div id="favoriteContainer"></div>
-      <div id="favEditActions" class="fav-edit-actions" hidden>
-        <button class="btn btn-mini btn-add-category-inline" id="addCategoryInlineBtn" type="button">+ 新建分类</button>
-      </div>
-    </section>
+    <div class="app-shell">
+      <header class="page-header">
+        <div class="page-header-left">
+          <div class="page-brand">
+            <span class="brand-dot"></span>
+            <span class="brand-name">TabDeck</span>
+          </div>
+          <h1 class="page-title">整理你的标签页</h1>
+          <p class="page-subtitle">常用直达 · 智能分类 · 一屏掌控</p>
+        </div>
+        <div class="page-header-right">
+          <div class="header-chip">
+            <span class="chip-label">Workspace</span>
+            <span class="chip-value">标签分类整理</span>
+          </div>
+        </div>
+      </header>
 
-    <section class="category-section">
-      <div class="section-header">
-        <h2 class="section-title">打开页面</h2>
+      <div class="dashboard">
+        <section class="favorite-section" id="favoriteSection">
+          <div class="section-header">
+            <div class="section-heading">
+              <h2 class="section-title">常用网站</h2>
+              <span class="section-hint">快速直达</span>
+            </div>
+            <button class="btn btn-mini" id="editFavoritesBtn" type="button">编辑分类</button>
+          </div>
+          <div id="favoriteContainer"></div>
+          <div id="favEditActions" class="fav-edit-actions" hidden>
+            <button class="btn btn-mini btn-add-category-inline" id="addCategoryInlineBtn" type="button">+ 新建分类</button>
+          </div>
+        </section>
+
+        <section class="category-section">
+          <div class="section-header">
+            <div class="section-heading">
+              <h2 class="section-title">打开页面</h2>
+              <span class="section-hint">按域名整理</span>
+            </div>
+          </div>
+          <main id="categoryContainer" class="category-container"></main>
+        </section>
       </div>
-      <main id="categoryContainer" class="category-container"></main>
-    </section>
+    </div>
 
     <template id="categoryTemplate">
       <section class="category" draggable="false">
@@ -57,7 +84,7 @@
     </template>
 
     <template id="favoriteCategoryTemplate">
-      <div class="fav-category">
+      <div class="fav-category" draggable="false">
         <div class="fav-category-header">
           <div class="fav-category-title-row">
             <span class="fav-category-name" title="点击编辑分类名"></span>
@@ -109,10 +136,18 @@
     </div>
 
     <div id="linkPreview" class="link-preview" hidden>
-      <div class="link-preview-domain"></div>
-      <div class="link-preview-title"></div>
-      <div class="link-preview-summary"></div>
-      <div class="link-preview-url"></div>
+      <div class="link-preview-figure no-image">
+        <img class="link-preview-image" alt="" />
+        <div class="link-preview-fallback">
+          <img class="link-preview-favicon" alt="" />
+        </div>
+      </div>
+      <div class="link-preview-body">
+        <div class="link-preview-domain"></div>
+        <div class="link-preview-title"></div>
+        <div class="link-preview-summary"></div>
+        <div class="link-preview-url"></div>
+      </div>
     </div>
 
     <script src="./organizer.clean.js" type="module"></script>

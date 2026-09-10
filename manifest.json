@@ -3,7 +3,7 @@
   "name": "标签分类整理 MVP",
   "version": "0.1.2",
   "description": "当标签过多时自动进入简易分类整理界面，按域名整理标签。",
-  "permissions": ["tabs", "storage", "sessions"],
+  "permissions": ["tabs", "storage", "sessions", "scripting", "debugger"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "background": {
     "service_worker": "background.js"

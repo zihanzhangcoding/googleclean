@@ -48,7 +48,8 @@ const favoriteState = {
   sites: [],
   categories: [],
   dragging: null,
-  editMode: false
+  editMode: false,
+  containerDragBound: false
 };
 
 let uncategorizedName = "未分类";
@@ -101,6 +102,9 @@ function getPreviewNodes() {
     return null;
   }
   return {
+    image: linkPreview.querySelector(".link-preview-image"),
+    favicon: linkPreview.querySelector(".link-preview-favicon"),
+    figure: linkPreview.querySelector(".link-preview-figure"),
     domain: linkPreview.querySelector(".link-preview-domain"),
     title: linkPreview.querySelector(".link-preview-title"),
     summary: linkPreview.querySelector(".link-preview-summary"),
@@ -108,32 +112,54 @@ function getPreviewNodes() {
   };
 }
 
-function movePreview(event) {
-  if (!linkPreview || linkPreview.hidden) {
-    return;
+function faviconServiceUrl(url) {
+  try {
+    const host = new URL(url).hostname;
+    return `https://www.google.com/s2/favicons?domain=${host}&sz=128`;
+  } catch (_error) {
+    return "";
   }
-  const offset = 18;
-  const previewWidth = Math.min(360, window.innerWidth - 24);
-  const previewHeight = linkPreview.offsetHeight || 140;
-  const maxLeft = Math.max(12, window.innerWidth - previewWidth - 12);
-  const maxTop = Math.max(12, window.innerHeight - previewHeight - 12);
-  const left = Math.min(event.clientX + offset, maxLeft);
-  const top = Math.min(event.clientY + offset, maxTop);
-  linkPreview.style.left = `${left}px`;
-  linkPreview.style.top = `${top}px`;
 }
 
-function showPreviewSkeleton(event, title, url) {
+function setPreviewImage(nodes, imageUrl, fallbackUrl) {
+  if (!nodes || !nodes.image || !nodes.figure) {
+    return;
+  }
+  if (nodes.favicon) {
+    nodes.favicon.src = fallbackUrl || faviconServiceUrl(fallbackUrl) || "";
+  }
+  if (imageUrl) {
+    nodes.image.onload = () => {
+      nodes.figure.classList.remove("no-image");
+    };
+    nodes.image.onerror = () => {
+      nodes.figure.classList.add("no-image");
+      nodes.image.removeAttribute("src");
+    };
+    nodes.image.src = imageUrl;
+  } else {
+    nodes.image.onload = null;
+    nodes.image.onerror = null;
+    nodes.image.removeAttribute("src");
+    nodes.figure.classList.add("no-image");
+  }
+}
+
+function movePreview() {
+  // Preview is centered in the viewport via CSS; no cursor-follow positioning.
+}
+
+function showPreviewSkeleton(_event, title, url) {
   const nodes = getPreviewNodes();
   if (!linkPreview || !nodes) {
     return;
   }
   nodes.domain.textContent = getDomainLabel(url);
   nodes.title.textContent = title || "正在读取页面信息";
-  nodes.summary.textContent = "正在加载网页摘要...";
+  nodes.summary.textContent = "正在加载页面预览...";
   nodes.url.textContent = url || "";
+  setPreviewImage(nodes, "", faviconServiceUrl(url));
   linkPreview.hidden = false;
-  movePreview(event);
 }
 
 function hidePreview() {
@@ -167,11 +193,42 @@ function extractSummaryFromDocument(doc) {
   return "暂时无法提取网页摘要。";
 }
 
+function resolveAbsoluteUrl(src, base) {
+  try {
+    return new URL(src, base).href;
+  } catch (_error) {
+    return "";
+  }
+}
+
+function extractImageFromDocument(doc, baseUrl) {
+  const selectors = [
+    'meta[property="og:image"]',
+    'meta[property="og:image:url"]',
+    'meta[name="og:image"]',
+    'meta[name="twitter:image"]',
+    'meta[name="twitter:image:src"]',
+    'link[rel="image_src"]'
+  ];
+  for (const selector of selectors) {
+    const el = doc.querySelector(selector);
+    const content = el?.getAttribute("content") || el?.getAttribute("href") || "";
+    if (content) {
+      const abs = resolveAbsoluteUrl(content, baseUrl);
+      if (abs) {
+        return abs;
+      }
+    }
+  }
+  return "";
+}
+
 async function fetchLinkSummary(url) {
   if (!isHttpLikeUrl(url)) {
     return {
-      title: "当前链接不支持摘要预览",
-      summary: "仅支持 http 或 https 页面摘要。",
+      title: "当前链接不支持内容预览",
+      summary: "仅支持 http 或 https 页面预览。",
+      image: "",
       url
     };
   }
@@ -195,11 +252,13 @@ async function fetchLinkSummary(url) {
           const doc = parser.parseFromString(html, "text/html");
           const title = truncateText(doc.title || "", 120);
           const summary = extractSummaryFromDocument(doc);
-          return { title, summary, url };
+          const image = extractImageFromDocument(doc, url);
+          return { title, summary, image, url };
         } catch (_error) {
           return {
             title: "",
-            summary: "该网站限制了内容读取，当前仅显示链接信息。",
+            summary: "该网站限制了内容读取，暂时无法显示页面预览。",
+            image: "",
             url
           };
         }
@@ -209,36 +268,157 @@ async function fetchLinkSummary(url) {
   return linkSummaryCache.get(url);
 }
 
-async function showLinkPreview(event, title, url) {
+async function getTabScreenshot(tabId) {
+  if (tabId == null || !chrome.runtime || !chrome.runtime.sendMessage) {
+    return "";
+  }
+  try {
+    const resp = await new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: "getScreenshot", tabId }, (r) => {
+        if (chrome.runtime.lastError) {
+          resolve(null);
+          return;
+        }
+        resolve(r);
+      });
+    });
+    return (resp && resp.dataUrl) || "";
+  } catch (_error) {
+    return "";
+  }
+}
+
+async function extractFromLiveTab(tabId) {
+  if (tabId == null || !chrome.scripting || !chrome.scripting.executeScript) {
+    return null;
+  }
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const pick = (selectors) => {
+          for (const s of selectors) {
+            const el = document.querySelector(s);
+            const c = el && (el.getAttribute("content") || el.getAttribute("href"));
+            if (c) return c;
+          }
+          return "";
+        };
+        const abs = (u) => {
+          try { return new URL(u, location.href).href; } catch (_) { return ""; }
+        };
+        let image = pick([
+          'meta[property="og:image"]',
+          'meta[property="og:image:url"]',
+          'meta[name="og:image"]',
+          'meta[name="twitter:image"]',
+          'meta[name="twitter:image:src"]',
+          'link[rel="image_src"]'
+        ]);
+        if (!image) {
+          let best = "";
+          let area = 0;
+          for (const img of Array.from(document.images || [])) {
+            const r = img.getBoundingClientRect();
+            const a = r.width * r.height;
+            const src = img.currentSrc || img.src || "";
+            if (src && a > area && r.width >= 120 && r.height >= 90) {
+              area = a;
+              best = src;
+            }
+          }
+          image = best;
+        }
+        image = image ? abs(image) : "";
+        let summary = pick([
+          'meta[name="description"]',
+          'meta[property="og:description"]',
+          'meta[name="twitter:description"]'
+        ]);
+        if (!summary) {
+          const ps = Array.from(document.querySelectorAll("article p, main p, p"))
+            .map((p) => (p.innerText || "").trim())
+            .filter((t) => t.length >= 30);
+          summary = ps[0] || "";
+        }
+        if (!summary && document.body) {
+          summary = (document.body.innerText || "").trim().slice(0, 220);
+        }
+        return {
+          title: document.title || "",
+          summary: (summary || "").slice(0, 220),
+          image
+        };
+      }
+    });
+    const r = results && results[0] && results[0].result;
+    return r || null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function showLinkPreview(event, title, url, tabId) {
   if (!url) {
     return;
   }
   activePreviewUrl = url;
   showPreviewSkeleton(event, title, url);
-  const previewData = await fetchLinkSummary(url);
+
+  // 1) Kick off the real screenshot capture in parallel (it can take ~1s via
+  //    the debugger protocol) so it does not block the text from rendering.
+  const shotPromise = getTabScreenshot(tabId);
+
+  // 2) Extract text (and a possible og:image) from the already-open live tab
+  //    DOM — works for authenticated/internal pages a plain fetch cannot read.
+  let data = await extractFromLiveTab(tabId);
   if (activePreviewUrl !== url) {
     return;
   }
+  if (!data || (!data.summary && !data.image)) {
+    const fetched = await fetchLinkSummary(url);
+    if (activePreviewUrl !== url) {
+      return;
+    }
+    data = {
+      title: (data && data.title) || fetched.title,
+      summary: fetched.summary || (data && data.summary) || "",
+      image: (data && data.image) || fetched.image || ""
+    };
+  }
+
   const nodes = getPreviewNodes();
   if (!nodes) {
     return;
   }
   nodes.domain.textContent = getDomainLabel(url);
-  nodes.title.textContent = previewData.title || title || "未命名网页";
-  nodes.summary.textContent = previewData.summary || "暂时无法提取网页摘要。";
+  nodes.title.textContent = data.title || title || "未命名网页";
+  nodes.summary.textContent = data.summary || "暂时无法提取页面内容。";
   nodes.url.textContent = url;
+  // Show og:image immediately if present; the real screenshot replaces it once ready.
+  setPreviewImage(nodes, data.image || "", faviconServiceUrl(url));
+
+  // 3) When the real screenshot arrives, prefer it over everything else.
+  const shot = await shotPromise;
+  if (activePreviewUrl !== url) {
+    return;
+  }
+  if (shot) {
+    const latest = getPreviewNodes();
+    if (latest) {
+      setPreviewImage(latest, shot, faviconServiceUrl(url));
+    }
+  }
 }
 
-function attachPreviewHandlers(node, title, url) {
+function attachPreviewHandlers(node, title, url, tabId) {
   if (!node) {
     return;
   }
   node.addEventListener("mouseenter", (event) => {
-    void showLinkPreview(event, title, url);
+    void showLinkPreview(event, title, url, tabId);
   });
-  node.addEventListener("mousemove", movePreview);
   node.addEventListener("mouseleave", hidePreview);
-  node.addEventListener("blur", hidePreview);
 }
 
 async function getCurrentTab() {
@@ -268,6 +448,107 @@ function extractDomain(url) {
       return getRootDomain(parsed.hostname);
     }
     return "其他";
+  } catch (_error) {
+    return "其他";
+  }
+}
+
+function includesAny(text, keywords) {
+  return keywords.some((keyword) => text.includes(keyword));
+}
+
+function normalizeMatchText(...values) {
+  return values
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .replace(/\s+/g, "");
+}
+
+function isFeishuLikeHost(hostname) {
+  return [
+    "feishu.cn",
+    "larksuite.com",
+    "larkoffice.com",
+    "docs.bytedance.net",
+    "bytedance.feishu.cn",
+    "doubao.com"
+  ].some((domain) => hostname === domain || hostname.endsWith(`.${domain}`));
+}
+
+function getFeishuDocumentCategory(parsed, title = "") {
+  const hostname = parsed.hostname.toLowerCase();
+  const path = parsed.pathname.toLowerCase();
+  const search = parsed.search.toLowerCase();
+  const text = normalizeMatchText(hostname, path, search, title);
+  if (!isFeishuLikeHost(hostname)) {
+    return "";
+  }
+
+  if (includesAny(path, ["/sheets/", "/sheet/"]) || includesAny(text, ["飞书表格", "电子表格", "excel", "exel", "xlsx", "sheet", "表格"])) {
+    return "飞书表格";
+  }
+  if (includesAny(path, ["/docx/", "/docs/", "/wiki/"]) || includesAny(text, ["飞书文档", "云文档", "word", "docx"])) {
+    return "飞书文档";
+  }
+  if (includesAny(path, ["/base/", "/bitable/"]) || includesAny(text, ["多维表格", "bitable"])) {
+    return "飞书多维表格";
+  }
+  if (includesAny(path, ["/slides/"]) || includesAny(text, ["飞书幻灯片", "slides", "ppt"])) {
+    return "飞书幻灯片";
+  }
+  return "";
+}
+
+function getByteDanceToolCategory(parsed, title = "") {
+  const hostname = parsed.hostname.toLowerCase();
+  const rootDomain = getRootDomain(hostname);
+  const path = parsed.pathname.toLowerCase();
+  const search = parsed.search.toLowerCase();
+  const text = normalizeMatchText(hostname, path, search, title);
+  const isByteDanceHost = [
+    "bytedance.net",
+    "bytedance.com",
+    "byted.org",
+    "byteintl.net",
+    "snssdk.com"
+  ].includes(rootDomain);
+  const isDouyinHost = hostname.includes("douyin") || rootDomain === "jinritemai.com";
+  if (!isByteDanceHost && !isDouyinHost) {
+    return "";
+  }
+
+  if (
+    includesAny(text, ["抖音ai工作台", "抖音ai", "douyinai", "douyin-ai"]) ||
+    (isDouyinHost && includesAny(text, ["aiworkbench", "ai工作台", "aistudio", "/ai"]))
+  ) {
+    return "抖音 AI 工作台";
+  }
+  if (includesAny(text, ["tcs"])) {
+    return "TCS";
+  }
+
+  if (!isByteDanceHost) {
+    return "";
+  }
+
+  const product = hostname.slice(0, -rootDomain.length).replace(/\.$/, "").split(".").filter(Boolean)[0];
+  if (!product || product === "www") {
+    return "";
+  }
+  return `字节工具 - ${product.toUpperCase()}`;
+}
+
+function getOpenPageCategory(tab) {
+  const url = tab.url || "";
+  const title = tab.title || "";
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "其他";
+    }
+
+    return getFeishuDocumentCategory(parsed, title) || getByteDanceToolCategory(parsed, title) || getRootDomain(parsed.hostname);
   } catch (_error) {
     return "其他";
   }
@@ -394,16 +675,16 @@ function buildInitialCategories(tabs) {
   const map = new Map();
   const sortedTabs = [...tabs].sort((a, b) => a.index - b.index);
   for (const tab of sortedTabs) {
-    const domain = extractDomain(tab.url || "");
-    if (!map.has(domain)) {
-      map.set(domain, {
+    const categoryName = getOpenPageCategory(tab);
+    if (!map.has(categoryName)) {
+      map.set(categoryName, {
         id: newCategoryId(),
-        name: domain,
+        name: categoryName,
         custom: false,
         tabs: []
       });
     }
-    map.get(domain).tabs.push({
+    map.get(categoryName).tabs.push({
       id: tab.id,
       title: tab.title || "(无标题)",
       url: tab.url || "",
@@ -434,14 +715,21 @@ function findTabLocation(tabId) {
 }
 
 function onDragStart(event, tabId, fromCategoryId) {
-  state.dragging = { tabId, fromCategoryId };
+  state.dragging = { type: "tab", tabId, fromCategoryId };
   event.dataTransfer.effectAllowed = "move";
   event.dataTransfer.setData("text/plain", String(tabId));
   event.currentTarget.classList.add("dragging");
 }
 
+function onCategoryDragStart(event, categoryId) {
+  state.dragging = { type: "category", categoryId };
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", categoryId);
+  event.currentTarget.classList.add("cat-dragging");
+}
+
 function onDragEnd(event) {
-  event.currentTarget.classList.remove("dragging");
+  event.currentTarget.classList.remove("dragging", "cat-dragging");
   state.dragging = null;
   for (const el of document.querySelectorAll(".category.drag-over")) {
     el.classList.remove("drag-over");
@@ -456,6 +744,8 @@ function render() {
     const section = categoryTemplate.content.firstElementChild.cloneNode(true);
     section.classList.add("card-spotlight", "reveal-item");
     section.style.setProperty("--reveal-index", catIndex);
+    section.draggable = true;
+    section.dataset.categoryId = category.id;
     const categoryFavicon = section.querySelector(".category-favicon");
     const titleEl = section.querySelector(".category-title");
     const tabListEl = section.querySelector(".tab-list");
@@ -463,7 +753,7 @@ function render() {
     const closeAllBtn = section.querySelector(".close-all-btn");
     const sampleTab = category.tabs[0] || null;
 
-    titleEl.textContent = `${category.name} (${category.tabs.length})`;
+    titleEl.textContent = `${category.name} - ${category.tabs.length}个`;
     titleEl.title = "双击编辑分类名";
     applyFavicon(categoryFavicon, sampleTab?.url || "", sampleTab?.faviconUrl || "");
 
@@ -478,9 +768,11 @@ function render() {
       });
     });
 
+    // Delete category: only for custom empty categories
     if (category.custom && category.tabs.length === 0) {
       deleteCategoryBtn.style.display = "inline-block";
       deleteCategoryBtn.addEventListener("click", async () => {
+        if (!confirm(`确定要删除分类"${category.name}"吗？\n\n此操作不可撤销。`)) return;
         state.categories = state.categories.filter((item) => item.id !== category.id);
         await saveTempState();
         render();
@@ -491,6 +783,8 @@ function render() {
 
     closeAllBtn.addEventListener("click", async () => {
       const tabIds = category.tabs.map((tab) => tab.id);
+      if (tabIds.length === 0) return;
+      if (!confirm(`确定要关闭分类"${category.name}"下的全部 ${tabIds.length} 个标签页吗？`)) return;
       try {
         await chrome.tabs.remove(tabIds);
       } catch (_error) {
@@ -499,6 +793,14 @@ function render() {
       await refreshCategories();
     });
 
+    // Category drag start
+    section.addEventListener("dragstart", (event) => {
+      if (event.target.closest(".tab-item, button, a, input")) return;
+      onCategoryDragStart(event, category.id);
+    });
+    section.addEventListener("dragend", onDragEnd);
+
+    // Handle drop: tab moving + category reordering
     section.addEventListener("dragover", (event) => {
       event.preventDefault();
       section.classList.add("drag-over");
@@ -510,25 +812,36 @@ function render() {
     section.addEventListener("drop", async (event) => {
       event.preventDefault();
       section.classList.remove("drag-over");
-      if (!state.dragging) {
-        return;
+      if (!state.dragging) return;
+
+      // Tab moving between categories
+      if (state.dragging.type === "tab") {
+        const { tabId, fromCategoryId } = state.dragging;
+        if (fromCategoryId === category.id) return;
+        const fromCategory = state.categories.find((item) => item.id === fromCategoryId);
+        const toCategory = state.categories.find((item) => item.id === category.id);
+        if (!fromCategory || !toCategory) return;
+        const moved = removeTabFromCategory(fromCategory, tabId);
+        if (!moved) return;
+        toCategory.tabs.push(moved);
+        await saveTempState();
+        render();
       }
-      const { tabId, fromCategoryId } = state.dragging;
-      if (fromCategoryId === category.id) {
-        return;
+
+      // Category reordering
+      if (state.dragging.type === "category") {
+        const { categoryId } = state.dragging;
+        const targetCatId = category.id;
+        if (!categoryId || !targetCatId || categoryId === targetCatId) return;
+        const draggedIdx = state.categories.findIndex((c) => c.id === categoryId);
+        const targetIdx = state.categories.findIndex((c) => c.id === targetCatId);
+        if (draggedIdx < 0 || targetIdx < 0) return;
+        const [draggedCat] = state.categories.splice(draggedIdx, 1);
+        const newTargetIdx = state.categories.findIndex((c) => c.id === targetCatId);
+        state.categories.splice(newTargetIdx, 0, draggedCat);
+        await saveTempState();
+        render();
       }
-      const fromCategory = state.categories.find((item) => item.id === fromCategoryId);
-      const toCategory = state.categories.find((item) => item.id === category.id);
-      if (!fromCategory || !toCategory) {
-        return;
-      }
-      const moved = removeTabFromCategory(fromCategory, tabId);
-      if (!moved) {
-        return;
-      }
-      toCategory.tabs.push(moved);
-      await saveTempState();
-      render();
     });
 
     let tabIndex = 0;
@@ -545,14 +858,22 @@ function render() {
       linkNode.href = tab.url || "about:blank";
       applyFavicon(faviconNode, tab.url, tab.faviconUrl || "");
       cacheFaviconUrl(tab.url, tab.faviconUrl || "");
-      linkNode.addEventListener("click", async (event) => {
+      tabItem.addEventListener("click", async (event) => {
+        if (event.target.closest(".tab-close-btn")) {
+          return;
+        }
         event.preventDefault();
         if (!tab.url) {
           return;
         }
-        await chrome.tabs.update(tab.id, { active: true });
+        try {
+          await chrome.tabs.update(tab.id, { active: true });
+          if (tab.windowId != null) {
+            await chrome.windows.update(tab.windowId, { focused: true });
+          }
+        } catch (_) {}
       });
-      attachPreviewHandlers(linkNode, tab.title, tab.url);
+      attachPreviewHandlers(tabItem, tab.title, tab.url, tab.id);
 
       const closeBtn = tabItem.querySelector(".tab-close-btn");
       closeBtn.addEventListener("click", async (e) => {
@@ -574,6 +895,27 @@ function render() {
     categoryContainer.appendChild(section);
     catIndex++;
   }
+
+  // Container-level drop for category reordering to end
+  categoryContainer.addEventListener("dragover", (e) => {
+    if (!state.dragging || state.dragging.type !== "category") return;
+    if (e.target.closest(".category")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  });
+  categoryContainer.addEventListener("drop", async (e) => {
+    if (!state.dragging || state.dragging.type !== "category") return;
+    if (e.target.closest(".category")) return;
+    e.preventDefault();
+    const { categoryId } = state.dragging;
+    if (!categoryId) return;
+    const draggedIdx = state.categories.findIndex((c) => c.id === categoryId);
+    if (draggedIdx < 0) return;
+    const [draggedCat] = state.categories.splice(draggedIdx, 1);
+    state.categories.push(draggedCat);
+    await saveTempState();
+    render();
+  });
 
   observeReveal(categoryContainer);
 }
@@ -691,9 +1033,13 @@ function renderFavoriteCategory(cat, sites, catIndex = 0) {
   }
   addSiteBtn.style.display = isEditMode ? "" : "none";
 
-  // Editing class for CSS hover styling
-  if (isEditMode) {
+  // Enable drag for categories in edit mode (except uncategorized)
+  if (isEditMode && cat.id !== null) {
+    catEl.draggable = true;
     catEl.classList.add("editing");
+  } else {
+    catEl.draggable = false;
+    if (isEditMode) catEl.classList.add("editing");
   }
 
   // Single-click category name to edit (in edit mode only)
@@ -715,7 +1061,9 @@ function renderFavoriteCategory(cat, sites, catIndex = 0) {
   });
 
   deleteBtn.addEventListener("click", async () => {
-    if (!confirm(`删除分类"${cat.name}"？分类下的网站将移入"未分类"。`)) return;
+    const siteCount = favoriteState.sites.filter((s) => s.categoryId === cat.id).length;
+    const siteMsg = siteCount > 0 ? `（该分类下有 ${siteCount} 个网站，将移入"未分类"）` : "";
+    if (!confirm(`确定要删除分类"${cat.name}"吗？${siteMsg}\n\n此操作不可撤销。`)) return;
     for (const site of favoriteState.sites) {
       if (site.categoryId === cat.id) {
         site.categoryId = null;
@@ -739,7 +1087,7 @@ function renderFavoriteCategory(cat, sites, catIndex = 0) {
 
   if (cat.id !== null && isEditMode) {
     catEl.addEventListener("dragstart", (e) => {
-      if (e.target.closest(".fav-site-card")) return;
+      if (e.target.closest(".fav-site-card, button, a, input")) return;
       favoriteState.dragging = { type: "category", categoryId: cat.id };
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", cat.id);
@@ -764,6 +1112,7 @@ function renderFavoriteSite(site, catEl, isEditMode = false, siteIndex = 0) {
   const siteEl = favoriteSiteTemplate.content.firstElementChild.cloneNode(true);
   siteEl.classList.add("card-spotlight", "reveal-item");
   siteEl.style.setProperty("--reveal-index", siteIndex);
+  siteEl.draggable = isEditMode;
   const faviconEl = siteEl.querySelector(".fav-site-favicon");
   const titleEl = siteEl.querySelector(".fav-site-title");
   const urlEl = siteEl.querySelector(".fav-site-url");
@@ -932,6 +1281,52 @@ function setupFavoriteDrag() {
         }
         await saveFavoriteData();
         renderFavorites();
+      }
+    });
+  }
+
+  if (!favoriteState.containerDragBound) {
+    favoriteState.containerDragBound = true;
+
+    favoriteContainer.addEventListener("dragover", (e) => {
+      if (!favoriteState.dragging) return;
+      if (e.target.closest(".fav-category") || e.target.closest(".fav-site-card")) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+    });
+
+    favoriteContainer.addEventListener("drop", async (e) => {
+      if (!favoriteState.dragging) return;
+      if (e.target.closest(".fav-category") || e.target.closest(".fav-site-card")) return;
+      e.preventDefault();
+
+      if (favoriteState.dragging.type === "category") {
+        const { categoryId } = favoriteState.dragging;
+        if (!categoryId) return;
+        const draggedIdx = favoriteState.categories.findIndex((c) => c.id === categoryId);
+        if (draggedIdx < 0) return;
+        const [draggedCat] = favoriteState.categories.splice(draggedIdx, 1);
+        favoriteState.categories.push(draggedCat);
+        let order = 0;
+        for (const cat of favoriteState.categories) {
+          cat.order = order++;
+        }
+        await saveFavoriteData();
+        renderFavorites();
+      }
+
+      if (favoriteState.dragging.type === "site") {
+        const { siteId } = favoriteState.dragging;
+        const dragged = favoriteState.sites.find((s) => s.id === siteId);
+        if (dragged) {
+          dragged.categoryId = null;
+          const maxOrder = favoriteState.sites
+            .filter((s) => s.categoryId === null && s.id !== dragged.id)
+            .reduce((max, s) => Math.max(max, s.order), -1);
+          dragged.order = maxOrder + 1;
+          await saveFavoriteData();
+          renderFavorites();
+        }
       }
     });
   }
@@ -1302,6 +1697,14 @@ async function init() {
   setupScrollGradients();
   setupRevealObserver();
   setupSpotlight();
+
+  // Ask the background worker to snapshot the active tab of every window now,
+  // so foreground pages have a fresh screenshot ready for hover previews.
+  try {
+    chrome.runtime.sendMessage({ type: "primeScreenshots" }, () => {
+      void chrome.runtime.lastError;
+    });
+  } catch (_) {}
 
   const [tab, currentWindow] = await Promise.all([
     getCurrentTab(),

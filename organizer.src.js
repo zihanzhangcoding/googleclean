@@ -48,7 +48,8 @@ const favoriteState = {
   sites: [],
   categories: [],
   dragging: null,
-  editMode: false
+  editMode: false,
+  containerDragBound: false
 };
 
 let uncategorizedName = "未分类";
@@ -434,14 +435,21 @@ function findTabLocation(tabId) {
 }
 
 function onDragStart(event, tabId, fromCategoryId) {
-  state.dragging = { tabId, fromCategoryId };
+  state.dragging = { type: "tab", tabId, fromCategoryId };
   event.dataTransfer.effectAllowed = "move";
   event.dataTransfer.setData("text/plain", String(tabId));
   event.currentTarget.classList.add("dragging");
 }
 
+function onCategoryDragStart(event, categoryId) {
+  state.dragging = { type: "category", categoryId };
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", categoryId);
+  event.currentTarget.classList.add("cat-dragging");
+}
+
 function onDragEnd(event) {
-  event.currentTarget.classList.remove("dragging");
+  event.currentTarget.classList.remove("dragging", "cat-dragging");
   state.dragging = null;
   for (const el of document.querySelectorAll(".category.drag-over")) {
     el.classList.remove("drag-over");
@@ -456,6 +464,8 @@ function render() {
     const section = categoryTemplate.content.firstElementChild.cloneNode(true);
     section.classList.add("card-spotlight", "reveal-item");
     section.style.setProperty("--reveal-index", catIndex);
+    section.draggable = true;
+    section.dataset.categoryId = category.id;
     const categoryFavicon = section.querySelector(".category-favicon");
     const titleEl = section.querySelector(".category-title");
     const tabListEl = section.querySelector(".tab-list");
@@ -478,9 +488,11 @@ function render() {
       });
     });
 
+    // Delete category: only for custom empty categories
     if (category.custom && category.tabs.length === 0) {
       deleteCategoryBtn.style.display = "inline-block";
       deleteCategoryBtn.addEventListener("click", async () => {
+        if (!confirm(`确定要删除分类"${category.name}"吗？\n\n此操作不可撤销。`)) return;
         state.categories = state.categories.filter((item) => item.id !== category.id);
         await saveTempState();
         render();
@@ -491,6 +503,8 @@ function render() {
 
     closeAllBtn.addEventListener("click", async () => {
       const tabIds = category.tabs.map((tab) => tab.id);
+      if (tabIds.length === 0) return;
+      if (!confirm(`确定要关闭分类"${category.name}"下的全部 ${tabIds.length} 个标签页吗？`)) return;
       try {
         await chrome.tabs.remove(tabIds);
       } catch (_error) {
@@ -499,6 +513,14 @@ function render() {
       await refreshCategories();
     });
 
+    // Category drag start
+    section.addEventListener("dragstart", (event) => {
+      if (event.target.closest(".tab-item, button, a, input")) return;
+      onCategoryDragStart(event, category.id);
+    });
+    section.addEventListener("dragend", onDragEnd);
+
+    // Handle drop: tab moving + category reordering
     section.addEventListener("dragover", (event) => {
       event.preventDefault();
       section.classList.add("drag-over");
@@ -510,25 +532,36 @@ function render() {
     section.addEventListener("drop", async (event) => {
       event.preventDefault();
       section.classList.remove("drag-over");
-      if (!state.dragging) {
-        return;
+      if (!state.dragging) return;
+
+      // Tab moving between categories
+      if (state.dragging.type === "tab") {
+        const { tabId, fromCategoryId } = state.dragging;
+        if (fromCategoryId === category.id) return;
+        const fromCategory = state.categories.find((item) => item.id === fromCategoryId);
+        const toCategory = state.categories.find((item) => item.id === category.id);
+        if (!fromCategory || !toCategory) return;
+        const moved = removeTabFromCategory(fromCategory, tabId);
+        if (!moved) return;
+        toCategory.tabs.push(moved);
+        await saveTempState();
+        render();
       }
-      const { tabId, fromCategoryId } = state.dragging;
-      if (fromCategoryId === category.id) {
-        return;
+
+      // Category reordering
+      if (state.dragging.type === "category") {
+        const { categoryId } = state.dragging;
+        const targetCatId = category.id;
+        if (!categoryId || !targetCatId || categoryId === targetCatId) return;
+        const draggedIdx = state.categories.findIndex((c) => c.id === categoryId);
+        const targetIdx = state.categories.findIndex((c) => c.id === targetCatId);
+        if (draggedIdx < 0 || targetIdx < 0) return;
+        const [draggedCat] = state.categories.splice(draggedIdx, 1);
+        const newTargetIdx = state.categories.findIndex((c) => c.id === targetCatId);
+        state.categories.splice(newTargetIdx, 0, draggedCat);
+        await saveTempState();
+        render();
       }
-      const fromCategory = state.categories.find((item) => item.id === fromCategoryId);
-      const toCategory = state.categories.find((item) => item.id === category.id);
-      if (!fromCategory || !toCategory) {
-        return;
-      }
-      const moved = removeTabFromCategory(fromCategory, tabId);
-      if (!moved) {
-        return;
-      }
-      toCategory.tabs.push(moved);
-      await saveTempState();
-      render();
     });
 
     let tabIndex = 0;
@@ -574,6 +607,27 @@ function render() {
     categoryContainer.appendChild(section);
     catIndex++;
   }
+
+  // Container-level drop for category reordering to end
+  categoryContainer.addEventListener("dragover", (e) => {
+    if (!state.dragging || state.dragging.type !== "category") return;
+    if (e.target.closest(".category")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  });
+  categoryContainer.addEventListener("drop", async (e) => {
+    if (!state.dragging || state.dragging.type !== "category") return;
+    if (e.target.closest(".category")) return;
+    e.preventDefault();
+    const { categoryId } = state.dragging;
+    if (!categoryId) return;
+    const draggedIdx = state.categories.findIndex((c) => c.id === categoryId);
+    if (draggedIdx < 0) return;
+    const [draggedCat] = state.categories.splice(draggedIdx, 1);
+    state.categories.push(draggedCat);
+    await saveTempState();
+    render();
+  });
 
   observeReveal(categoryContainer);
 }
@@ -691,9 +745,13 @@ function renderFavoriteCategory(cat, sites, catIndex = 0) {
   }
   addSiteBtn.style.display = isEditMode ? "" : "none";
 
-  // Editing class for CSS hover styling
-  if (isEditMode) {
+  // Enable drag for categories in edit mode (except uncategorized)
+  if (isEditMode && cat.id !== null) {
+    catEl.draggable = true;
     catEl.classList.add("editing");
+  } else {
+    catEl.draggable = false;
+    if (isEditMode) catEl.classList.add("editing");
   }
 
   // Single-click category name to edit (in edit mode only)
@@ -715,7 +773,9 @@ function renderFavoriteCategory(cat, sites, catIndex = 0) {
   });
 
   deleteBtn.addEventListener("click", async () => {
-    if (!confirm(`删除分类"${cat.name}"？分类下的网站将移入"未分类"。`)) return;
+    const siteCount = favoriteState.sites.filter((s) => s.categoryId === cat.id).length;
+    const siteMsg = siteCount > 0 ? `（该分类下有 ${siteCount} 个网站，将移入"未分类"）` : "";
+    if (!confirm(`确定要删除分类"${cat.name}"吗？${siteMsg}\n\n此操作不可撤销。`)) return;
     for (const site of favoriteState.sites) {
       if (site.categoryId === cat.id) {
         site.categoryId = null;
@@ -739,7 +799,7 @@ function renderFavoriteCategory(cat, sites, catIndex = 0) {
 
   if (cat.id !== null && isEditMode) {
     catEl.addEventListener("dragstart", (e) => {
-      if (e.target.closest(".fav-site-card")) return;
+      if (e.target.closest(".fav-site-card, button, a, input")) return;
       favoriteState.dragging = { type: "category", categoryId: cat.id };
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", cat.id);
@@ -764,6 +824,7 @@ function renderFavoriteSite(site, catEl, isEditMode = false, siteIndex = 0) {
   const siteEl = favoriteSiteTemplate.content.firstElementChild.cloneNode(true);
   siteEl.classList.add("card-spotlight", "reveal-item");
   siteEl.style.setProperty("--reveal-index", siteIndex);
+  siteEl.draggable = isEditMode;
   const faviconEl = siteEl.querySelector(".fav-site-favicon");
   const titleEl = siteEl.querySelector(".fav-site-title");
   const urlEl = siteEl.querySelector(".fav-site-url");
@@ -932,6 +993,52 @@ function setupFavoriteDrag() {
         }
         await saveFavoriteData();
         renderFavorites();
+      }
+    });
+  }
+
+  if (!favoriteState.containerDragBound) {
+    favoriteState.containerDragBound = true;
+
+    favoriteContainer.addEventListener("dragover", (e) => {
+      if (!favoriteState.dragging) return;
+      if (e.target.closest(".fav-category") || e.target.closest(".fav-site-card")) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+    });
+
+    favoriteContainer.addEventListener("drop", async (e) => {
+      if (!favoriteState.dragging) return;
+      if (e.target.closest(".fav-category") || e.target.closest(".fav-site-card")) return;
+      e.preventDefault();
+
+      if (favoriteState.dragging.type === "category") {
+        const { categoryId } = favoriteState.dragging;
+        if (!categoryId) return;
+        const draggedIdx = favoriteState.categories.findIndex((c) => c.id === categoryId);
+        if (draggedIdx < 0) return;
+        const [draggedCat] = favoriteState.categories.splice(draggedIdx, 1);
+        favoriteState.categories.push(draggedCat);
+        let order = 0;
+        for (const cat of favoriteState.categories) {
+          cat.order = order++;
+        }
+        await saveFavoriteData();
+        renderFavorites();
+      }
+
+      if (favoriteState.dragging.type === "site") {
+        const { siteId } = favoriteState.dragging;
+        const dragged = favoriteState.sites.find((s) => s.id === siteId);
+        if (dragged) {
+          dragged.categoryId = null;
+          const maxOrder = favoriteState.sites
+            .filter((s) => s.categoryId === null && s.id !== dragged.id)
+            .reduce((max, s) => Math.max(max, s.order), -1);
+          dragged.order = maxOrder + 1;
+          await saveFavoriteData();
+          renderFavorites();
+        }
       }
     });
   }
