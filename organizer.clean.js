@@ -149,6 +149,17 @@ function movePreview() {
   // Preview is centered in the viewport via CSS; no cursor-follow positioning.
 }
 
+function positionPreviewOverFavorites() {
+  if (!linkPreview) return;
+  const fav = document.getElementById("favoriteSection");
+  if (!fav) return;
+  const r = fav.getBoundingClientRect();
+  // Match the "常用网站" module's horizontal position and width, but keep the
+  // vertical centering (top:50% / translateY) defined in CSS untouched.
+  linkPreview.style.left = `${Math.round(r.left)}px`;
+  linkPreview.style.width = `${Math.round(r.width)}px`;
+}
+
 function showPreviewSkeleton(_event, title, url) {
   const nodes = getPreviewNodes();
   if (!linkPreview || !nodes) {
@@ -159,6 +170,7 @@ function showPreviewSkeleton(_event, title, url) {
   nodes.summary.textContent = "正在加载页面预览...";
   nodes.url.textContent = url || "";
   setPreviewImage(nodes, "", faviconServiceUrl(url));
+  positionPreviewOverFavorites();
   linkPreview.hidden = false;
 }
 
