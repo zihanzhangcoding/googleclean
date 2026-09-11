@@ -321,57 +321,76 @@ function getFeishuDocumentCategory(parsed, title = "") {
   return "";
 }
 
-function getByteDanceToolCategory(parsed, title = "") {
-  const hostname = parsed.hostname.toLowerCase();
-  const rootDomain = getRootDomain(hostname);
-  const path = parsed.pathname.toLowerCase();
-  const search = parsed.search.toLowerCase();
-  const text = normalizeMatchText(hostname, path, search, title);
-  const isByteDanceHost = [
-    "bytedance.net",
-    "bytedance.com",
-    "byted.org",
-    "byteintl.net",
-    "snssdk.com"
-  ].includes(rootDomain);
-  const isDouyinHost = hostname.includes("douyin") || rootDomain === "jinritemai.com";
-  if (!isByteDanceHost && !isDouyinHost) {
-    return "";
-  }
+// Human-readable platform names. Matched (in order) against the tab's
+// hostname + path + title. Only the document TITLE is used (never the page's
+// inner breadcrumb text), so sibling nav links don't pollute the match.
+const PLATFORM_NAME_RULES = [
+  { name: "抖音 AI 工作台", keys: ["抖音ai工作台", "douyinai", "douyin-ai"] },
+  { name: "Aime", keys: ["aime"] },
+  { name: "TCS", keys: ["tcs"] },
+  { name: "研发工作台", keys: ["研发工作台", "rdworkbench", "rd-workbench", "rd_workbench"] },
+  { name: "业务安全平台", keys: ["业务安全平台"] },
+  { name: "人工审核平台", keys: ["人工审核"] },
+  { name: "数据大盘", keys: ["数据大盘"] },
+  { name: "规则管理", keys: ["规则管理"] },
+  { name: "策略引擎", keys: ["策略引擎"] },
+  { name: "知识库", keys: ["知识库"] }
+];
 
-  if (
-    includesAny(text, ["抖音ai工作台", "抖音ai", "douyinai", "douyin-ai"]) ||
-    (isDouyinHost && includesAny(text, ["aiworkbench", "ai工作台", "aistudio", "/ai"]))
-  ) {
-    return "抖音 AI 工作台";
-  }
-  if (includesAny(text, ["tcs"])) {
-    return "TCS";
-  }
-
-  if (!isByteDanceHost) {
-    return "";
-  }
-
-  const product = hostname.slice(0, -rootDomain.length).replace(/\.$/, "").split(".").filter(Boolean)[0];
-  if (!product || product === "www") {
-    return "";
-  }
-  return `字节工具 - ${product.toUpperCase()}`;
+function firstPathSegment(parsed) {
+  const seg = (parsed.pathname || "").split("/").filter(Boolean)[0];
+  return seg ? seg.toLowerCase() : "";
 }
 
-function getOpenPageCategory(tab) {
+// Derive a readable platform/product name for a page. Prefer the curated map;
+// otherwise fall back to "<子域> / <首段路径>" so distinct apps stay distinct.
+function getPlatformName(parsed, title = "") {
+  const hostname = parsed.hostname.toLowerCase();
+  const path = parsed.pathname.toLowerCase();
+  const text = normalizeMatchText(hostname, path, title);
+  for (const rule of PLATFORM_NAME_RULES) {
+    if (includesAny(text, rule.keys)) {
+      return rule.name;
+    }
+  }
+  const rootDomain = getRootDomain(hostname);
+  const leadLabel = hostname.slice(0, -rootDomain.length).replace(/\.$/, "").split(".").filter(Boolean)[0];
+  const seg = firstPathSegment(parsed);
+  if (leadLabel && leadLabel !== "www") {
+    return seg ? `${leadLabel.toUpperCase()} / ${seg}` : leadLabel.toUpperCase();
+  }
+  return rootDomain;
+}
+
+// The platform IDENTITY (grouping key) is driven by the tab's actual favicon
+// (its logo) — the exact thing the user reads to tell platforms apart.
+// Different logo => different platform => different category. When no favicon is
+// available we fall back to hostname + first path segment so distinct apps on a
+// shared host (e.g. safe.bytedance.net/moderation vs .../rd) still split apart.
+function getPlatformIdentity(tab) {
   const url = tab.url || "";
   const title = tab.title || "";
+  const favicon = normalizeFaviconUrl(tab.favIconUrl || "");
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return "其他";
+      return { key: "其他", name: "其他" };
     }
 
-    return getFeishuDocumentCategory(parsed, title) || getByteDanceToolCategory(parsed, title) || getRootDomain(parsed.hostname);
+    // Feishu documents keep their by-type grouping (文档/表格/多维表格/幻灯片),
+    // regardless of logo, because they intentionally share one Feishu logo.
+    const feishu = getFeishuDocumentCategory(parsed, title);
+    if (feishu) {
+      return { key: `feishu:${feishu}`, name: feishu };
+    }
+
+    const name = getPlatformName(parsed, title);
+    const key = favicon
+      ? `logo:${favicon}`
+      : `host:${parsed.hostname.toLowerCase()}/${firstPathSegment(parsed)}`;
+    return { key, name };
   } catch (_error) {
-    return "其他";
+    return { key: "其他", name: "其他" };
   }
 }
 
@@ -494,18 +513,27 @@ async function clearTempState() {
 
 function buildInitialCategories(tabs) {
   const map = new Map();
+  const usedNames = new Map(); // display name -> count, to disambiguate collisions
   const sortedTabs = [...tabs].sort((a, b) => a.index - b.index);
   for (const tab of sortedTabs) {
-    const categoryName = getOpenPageCategory(tab);
-    if (!map.has(categoryName)) {
-      map.set(categoryName, {
+    const { key, name } = getPlatformIdentity(tab);
+    if (!map.has(key)) {
+      let displayName = name;
+      if (usedNames.has(displayName)) {
+        const n = usedNames.get(displayName) + 1;
+        usedNames.set(displayName, n);
+        displayName = `${name} (${n})`;
+      } else {
+        usedNames.set(displayName, 1);
+      }
+      map.set(key, {
         id: newCategoryId(),
-        name: categoryName,
+        name: displayName,
         custom: false,
         tabs: []
       });
     }
-    map.get(categoryName).tabs.push({
+    map.get(key).tabs.push({
       id: tab.id,
       title: tab.title || "(无标题)",
       url: tab.url || "",
