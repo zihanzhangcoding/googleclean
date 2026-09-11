@@ -149,18 +149,6 @@ function movePreview() {
   // Preview is centered in the viewport via CSS; no cursor-follow positioning.
 }
 
-function positionPreviewOverFavorites() {
-  if (!linkPreview) return;
-  const fav = document.getElementById("favoriteSection");
-  if (!fav) return;
-  const r = fav.getBoundingClientRect();
-  // Align the preview to fully cover the "常用网站" column, top-aligned.
-  linkPreview.style.left = `${Math.round(r.left)}px`;
-  linkPreview.style.top = `${Math.round(r.top)}px`;
-  linkPreview.style.width = `${Math.round(r.width)}px`;
-  linkPreview.style.transform = "none";
-}
-
 function showPreviewSkeleton(_event, title, url) {
   const nodes = getPreviewNodes();
   if (!linkPreview || !nodes) {
@@ -171,7 +159,6 @@ function showPreviewSkeleton(_event, title, url) {
   nodes.summary.textContent = "正在加载页面预览...";
   nodes.url.textContent = url || "";
   setPreviewImage(nodes, "", faviconServiceUrl(url));
-  positionPreviewOverFavorites();
   linkPreview.hidden = false;
 }
 

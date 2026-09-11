@@ -755,10 +755,10 @@ body::before {
 
 .link-preview {
   position: fixed;
-  left: 2rem;
+  left: 2.5rem;
   top: 50%;
   transform: translateY(-50%);
-  width: min(460px, calc(50vw - 3rem));
+  width: min(520px, calc(50vw - 3rem));
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--cream);
