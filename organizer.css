@@ -774,9 +774,8 @@ body::before {
 .link-preview-figure {
   position: relative;
   width: 100%;
-  height: 15rem;
+  height: 22rem;
   background: linear-gradient(135deg, var(--cream-high), var(--surface-high));
-  border-bottom: 1px solid var(--border-soft);
 }
 
 .link-preview-image {
@@ -809,7 +808,7 @@ body::before {
   box-shadow: var(--shadow-sm);
 }
 
-.link-preview-body { padding: 1rem 1.25rem 1.2rem; }
+.link-preview-body { display: none; }
 
 .link-preview-domain {
   font-size: 0.62rem;
